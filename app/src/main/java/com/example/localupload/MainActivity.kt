@@ -1,144 +1,244 @@
 package com.example.localupload
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material3.Icon
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavDestination.Companion.hierarchy
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.localupload.ui.PhotoDetailScreen
 import com.example.localupload.ui.PhotoHistoryScreen
 import com.example.localupload.ui.PhotoPickerScreen
+import com.example.localupload.ui.UploadScreen
 import com.example.localupload.ui.theme.LocalUploadTheme
 import com.example.localupload.viewmodel.LocalUploadViewModel
 
-/**
- * Single Activity — hosts the entire Compose UI.
- *
- * Key responsibilities:
- *  1. When the Photo Picker returns URIs, call takePersistableUriPermission() on EACH URI
- *     before passing them to the ViewModel. This makes URIs permanently readable across
- *     app restarts and reboots — required because WorkManager runs after the app is killed.
- *  2. Request POST_NOTIFICATIONS permission on Android 13+ so WorkManager can post
- *     upload progress and result notifications.
- *
- * Navigation:
- *   "photo_picker"   → PhotoPickerScreen  (select & upload photos)
- *   "photo_history"  → PhotoHistoryScreen (view upload history from Room DB)
- */
+private object Routes {
+    const val GALLERY = "gallery"
+    const val UPLOAD = "upload"
+    const val HISTORY = "history"
+    const val DETAIL = "detail/{photoId}"
+
+    fun detail(photoId: String): String {
+        return "detail/$photoId"
+    }
+}
+
+private data class BottomTab(
+    val route: String,
+    val label: String,
+    val icon: ImageVector
+)
+
 class MainActivity : ComponentActivity() {
 
-    // ViewModel is created at Activity scope — shared with both Compose screens
-    private lateinit var uploadViewModel: LocalUploadViewModel
-
-    // Launcher to request POST_NOTIFICATIONS permission (Android 13+)
-    private val notificationPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /* granted or denied — WorkManager will still run, just without notifications if denied */ }
+    private val notificationPermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) {
+            // WorkManager still runs if notification permission is denied.
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
 
-        // Request notification permission on Android 13+ (API 33+)
+        enableEdgeToEdge()
         requestNotificationPermissionIfNeeded()
 
         setContent {
             LocalUploadTheme {
-                // AndroidViewModel — Compose uses the Activity's ViewModelStoreOwner
-                uploadViewModel = viewModel()
-                AppNavigation(
-                    viewModel = uploadViewModel,
-                    onUrisPicked = { uris -> grantPersistablePermissions(uris) }
-                )
+                AppNavigation()
             }
         }
     }
 
-    /**
-     * Requests POST_NOTIFICATIONS permission on Android 13+ if not already granted.
-     * On Android 12 and below, notifications don't require explicit permission.
-     */
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
+            val permissionGranted =
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
 
-            if (!granted) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-    }
-
-    /**
-     * Grants persistable read permission for each URI returned by the Photo Picker.
-     *
-     * Without this call, Photo Picker URIs are only valid for the current session.
-     * After this call, URIs remain readable even after:
-     *   - App is killed and reopened
-     *   - Phone is restarted
-     *   - WorkManager runs the upload in background after app kill
-     *
-     * After granting permissions, URIs are saved to Room DB pending_photos table
-     * via ViewModel.addPendingPhotos().
-     */
-    private fun grantPersistablePermissions(uris: List<Uri>) {
-        val persistedUris = uris.mapNotNull { uri ->
-            try {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+            if (!permissionGranted) {
+                notificationPermissionLauncher.launch(
+                    Manifest.permission.POST_NOTIFICATIONS
                 )
-                uri
-            } catch (e: SecurityException) {
-                // Some URIs (e.g. file:// URIs) don't support persistable permissions
-                // Still pass them through — they'll work for the current session
-                uri
             }
         }
-        uploadViewModel.addPendingPhotos(persistedUris)
     }
 }
 
 @Composable
-fun AppNavigation(
-    viewModel: LocalUploadViewModel,
-    onUrisPicked: (List<Uri>) -> Unit
-) {
+private fun AppNavigation() {
     val navController = rememberNavController()
 
-    NavHost(
-        navController = navController,
-        startDestination = "photo_picker"
-    ) {
-        composable("photo_picker") {
-            PhotoPickerScreen(
-                viewModel = viewModel,
-                onUrisPicked = onUrisPicked,
-                onNavigateToHistory = {
-                    navController.navigate("photo_history")
-                }
-            )
-        }
+    /*
+     * Shared across Gallery, Upload, History and Detail screens.
+     * This allows prepared Picsum URIs to appear on UploadScreen.
+     */
+    val viewModel: LocalUploadViewModel = viewModel()
 
-        composable("photo_history") {
-            PhotoHistoryScreen(
-                viewModel = viewModel,
-                onNavigateBack = {
-                    navController.popBackStack()
+    val isPreparingPicsumPhotos by
+    viewModel.isPreparingPicsumPhotos.collectAsState()
+
+    val tabs = listOf(
+        BottomTab(
+            route = Routes.GALLERY,
+            label = "Gallery",
+            icon = Icons.Filled.PhotoLibrary
+        ),
+        BottomTab(
+            route = Routes.UPLOAD,
+            label = "Upload",
+            icon = Icons.Filled.CloudUpload
+        ),
+        BottomTab(
+            route = Routes.HISTORY,
+            label = "History",
+            icon = Icons.Filled.History
+        )
+    )
+
+    val navBackStackEntry by
+    navController.currentBackStackEntryAsState()
+
+    val currentDestination =
+        navBackStackEntry?.destination
+
+    val showBottomBar =
+        currentDestination?.route != Routes.DETAIL
+
+    Scaffold(
+        bottomBar = {
+            if (showBottomBar) {
+                NavigationBar {
+                    tabs.forEach { tab ->
+                        val selected =
+                            currentDestination
+                                ?.hierarchy
+                                ?.any { destination ->
+                                    destination.route == tab.route
+                                } == true
+
+                        NavigationBarItem(
+                            icon = {
+                                Icon(
+                                    imageVector = tab.icon,
+                                    contentDescription = tab.label
+                                )
+                            },
+                            label = {
+                                Text(
+                                    text = tab.label,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            },
+                            selected = selected,
+                            onClick = {
+                                navController.navigate(tab.route) {
+                                    popUpTo(
+                                        navController.graph
+                                            .findStartDestination()
+                                            .id
+                                    ) {
+                                        saveState = true
+                                    }
+
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            }
+                        )
+                    }
                 }
-            )
+            }
+        }
+    ) { innerPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = Routes.GALLERY,
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            composable(Routes.GALLERY) {
+                PhotoPickerScreen(
+                    viewModel = viewModel,
+                    isPreparingPhotos = isPreparingPicsumPhotos,
+                    onPhotoClick = { photoId ->
+                        navController.navigate(
+                            Routes.detail(photoId)
+                        )
+                    },
+                    onContinueToUpload = { selectedPhotos ->
+                        /*
+                         * Cache hit: reuse existing picsum_<id>.jpg.
+                         * Cache miss: download it once.
+                         * This does not start the server upload.
+                         */
+                        viewModel.preparePicsumPhotos(
+                            photos = selectedPhotos,
+                            onReady = {
+                                navController.navigate(Routes.UPLOAD) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+                    }
+                )
+            }
+
+            composable(Routes.UPLOAD) {
+                UploadScreen(
+                    viewModel = viewModel
+                )
+            }
+
+            composable(Routes.HISTORY) {
+                PhotoHistoryScreen(
+                    viewModel = viewModel
+                )
+            }
+
+            composable(Routes.DETAIL) { backStackEntry ->
+                val photoId =
+                    backStackEntry.arguments
+                        ?.getString("photoId")
+                        .orEmpty()
+
+                PhotoDetailScreen(
+                    photoId = photoId,
+                    viewModel = viewModel,
+                    onBack = {
+                        navController.popBackStack()
+                    }
+                )
+            }
         }
     }
 }

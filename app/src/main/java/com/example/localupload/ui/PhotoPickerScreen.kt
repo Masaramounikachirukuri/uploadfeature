@@ -1,33 +1,35 @@
 package com.example.localupload.ui
 
-import android.net.Uri
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.ExperimentalMaterialApi
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material.pullrefresh.PullRefreshIndicator
+import androidx.compose.material.pullrefresh.pullRefresh
+import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -35,10 +37,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -48,647 +47,708 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.SubcomposeAsyncImage
 import com.example.localupload.domain.model.Photo
-import com.example.localupload.domain.model.PicsumPhoto
+import com.example.localupload.viewmodel.GalleryState
 import com.example.localupload.viewmodel.LocalUploadViewModel
-import com.example.localupload.viewmodel.PicsumState
-import com.example.localupload.viewmodel.UploadState
-import java.io.File
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    ExperimentalMaterialApi::class
+)
 @Composable
 fun PhotoPickerScreen(
-    viewModel: LocalUploadViewModel,
-    onUrisPicked: (List<Uri>) -> Unit,
-    onNavigateToHistory: () -> Unit
-) {
-    val pendingPhotos by viewModel.pendingPhotos.collectAsState()
-    val uploadState by viewModel.uploadState.collectAsState()
-    val picsumState by viewModel.picsumState.collectAsState()
-    val picsumPhotos by viewModel.picsumPhotos.collectAsState()
-    val currentPage by viewModel.currentPicsumPage.collectAsState()
+    onPhotoClick: (photoId: String) -> Unit,
 
-    val selectedCount = picsumPhotos.count { photo ->
-        photo.isSelected
+    /*
+     * This callback only prepares the selected Picsum photos and navigates
+     * to the Upload screen. It must not start WorkManager directly.
+     */
+    onContinueToUpload: (photos: List<Photo>) -> Unit = {},
+
+    /*
+     * MainActivity can pass the ViewModel preparation state here.
+     * It disables repeated clicks while the cache is being checked.
+     */
+    isPreparingPhotos: Boolean = false,
+
+    viewModel: LocalUploadViewModel = viewModel()
+) {
+    val galleryState by viewModel.galleryState.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
+
+    var selectedPhotoIds by remember {
+        mutableStateOf<Set<String>>(emptySet())
     }
+
+    val availablePhotos = when (val state = galleryState) {
+        is GalleryState.Success -> state.photos
+        else -> emptyList()
+    }
+
+    val selectedPhotos = availablePhotos.filter { photo ->
+        photo.id in selectedPhotoIds
+    }
+
+    val allPhotosSelected =
+        availablePhotos.isNotEmpty() &&
+                selectedPhotoIds.size == availablePhotos.size
+
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = isRefreshing,
+        onRefresh = {
+            if (!isPreparingPhotos) {
+                selectedPhotoIds = emptySet()
+                viewModel.fetchGallery(forceRefresh = true)
+            }
+        }
+    )
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "Picsum Photo Upload",
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                actions = {
-                    IconButton(
-                        onClick = onNavigateToHistory
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.List,
-                            contentDescription = "View upload history"
+                    Column {
+                        Text(
+                            text = "Picsum Photos",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+
+                        Text(
+                            text = "Select photos and continue to upload",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary.copy(
+                                alpha = 0.8f
+                            )
                         )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor =
-                        MaterialTheme.colorScheme.primaryContainer
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary
                 )
             )
+        },
+        bottomBar = {
+            if (availablePhotos.isNotEmpty()) {
+                PicsumContinueActionBar(
+                    selectedCount = selectedPhotos.size,
+                    isPreparing = isPreparingPhotos,
+                    onContinueClick = {
+                        if (
+                            selectedPhotos.isNotEmpty() &&
+                            !isPreparingPhotos
+                        ) {
+                            onContinueToUpload(selectedPhotos)
+                        }
+                    }
+                )
+            }
         }
-    ) { paddingValues ->
-
-        Column(
+    ) { innerPadding ->
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
-                .verticalScroll(rememberScrollState())
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(innerPadding)
+                .pullRefresh(pullRefreshState)
         ) {
-            Text(
-                text = "Available Photos",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-
-            PicsumStatusSection(
-                state = picsumState,
-                currentPage = currentPage,
-                onRetry = {
-                    viewModel.retryPicsumLoading()
-                }
-            )
-
-            if (
-                picsumPhotos.isNotEmpty() &&
-                picsumState !is PicsumState.Loading
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(
+                    start = 8.dp,
+                    top = 8.dp,
+                    end = 8.dp,
+                    bottom = 12.dp
+                ),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(360.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(
-                        items = picsumPhotos,
-                        key = { photo -> photo.id }
-                    ) { photo ->
-                        PicsumPhotoItem(
-                            photo = photo,
-                            onClick = {
-                                viewModel.togglePicsumPhotoSelection(
-                                    photoId = photo.id
-                                )
+                when (val state = galleryState) {
+                    is GalleryState.Loading -> {
+                        item(
+                            span = {
+                                GridItemSpan(maxLineSpan)
                             }
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            viewModel.loadPreviousPicsumPage()
-                        },
-                        enabled =
-                            currentPage > 1 &&
-                                    picsumState !is PicsumState.Loading
-                    ) {
-                        Text(text = "Previous")
-                    }
-
-                    Text(
-                        text = "Page $currentPage",
-                        fontWeight = FontWeight.Medium
-                    )
-
-                    OutlinedButton(
-                        onClick = {
-                            viewModel.loadNextPicsumPage()
-                        },
-                        enabled =
-                            picsumState !is PicsumState.Loading
-                    ) {
-                        Text(text = "Next")
-                    }
-                }
-
-                Button(
-                    onClick = {
-                        viewModel.moveSelectedPicsumPhotosToUploadQueue()
-                    },
-                    enabled =
-                        selectedCount > 0 &&
-                                picsumState !is PicsumState.Downloading,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null
-                    )
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    Text(
-                        text = if (selectedCount == 1) {
-                            "Move 1 Photo to Upload Folder"
-                        } else {
-                            "Move $selectedCount Photos to Upload Folder"
+                        ) {
+                            GalleryLoadingState()
                         }
-                    )
-                }
-            }
+                    }
 
-            HorizontalDivider()
+                    is GalleryState.Error -> {
+                        item(
+                            span = {
+                                GridItemSpan(maxLineSpan)
+                            }
+                        ) {
+                            GalleryErrorState(
+                                message = state.message,
+                                onRetry = {
+                                    viewModel.fetchGallery(
+                                        forceRefresh = true
+                                    )
+                                }
+                            )
+                        }
+                    }
 
-            Text(
-                text = "Upload Folder",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-
-            if (pendingPhotos.isEmpty()) {
-                EmptyUploadFolder()
-            } else {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color =
-                        MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Text(
-                        text = if (pendingPhotos.size == 1) {
-                            "1 photo is ready to upload"
+                    is GalleryState.Success -> {
+                        if (state.photos.isEmpty()) {
+                            item(
+                                span = {
+                                    GridItemSpan(maxLineSpan)
+                                }
+                            ) {
+                                EmptyGalleryState()
+                            }
                         } else {
-                            "${pendingPhotos.size} photos are ready to upload"
-                        },
-                        modifier = Modifier.padding(12.dp),
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(4),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(
-                            min = 100.dp,
-                            max = 220.dp
-                        ),
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                    verticalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    items(
-                        items = pendingPhotos,
-                        key = { photo -> photo.id }
-                    ) { photo ->
-                        PendingPhotoThumbnail(
-                            photo = photo,
-                            onRemove = {
-                                viewModel.removePendingPhoto(
-                                    id = photo.id
+                            item(
+                                span = {
+                                    GridItemSpan(maxLineSpan)
+                                }
+                            ) {
+                                GallerySelectionHeader(
+                                    totalCount = state.photos.size,
+                                    selectedCount = selectedPhotoIds.size,
+                                    allSelected = allPhotosSelected,
+                                    enabled = !isPreparingPhotos,
+                                    onClearSelection = {
+                                        selectedPhotoIds = emptySet()
+                                    },
+                                    onSelectAll = {
+                                        selectedPhotoIds =
+                                            if (allPhotosSelected) {
+                                                emptySet()
+                                            } else {
+                                                state.photos
+                                                    .map { photo -> photo.id }
+                                                    .toSet()
+                                            }
+                                    }
                                 )
                             }
-                        )
+
+                            items(
+                                items = state.photos,
+                                key = { photo -> photo.id }
+                            ) { photo ->
+                                ApiPhotoGridItem(
+                                    photo = photo,
+                                    isSelected =
+                                        photo.id in selectedPhotoIds,
+                                    enabled = !isPreparingPhotos,
+                                    onToggleSelection = {
+                                        selectedPhotoIds =
+                                            if (
+                                                photo.id in selectedPhotoIds
+                                            ) {
+                                                selectedPhotoIds - photo.id
+                                            } else {
+                                                selectedPhotoIds + photo.id
+                                            }
+                                    },
+                                    onOpenDetails = {
+                                        onPhotoClick(photo.id)
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
 
-            UploadStatusSection(
-                state = uploadState,
-                onCancel = {
-                    viewModel.cancelUpload()
-                },
-                onDismiss = {
-                    viewModel.resetState()
-                }
+            PullRefreshIndicator(
+                refreshing = isRefreshing,
+                state = pullRefreshState,
+                modifier = Modifier.align(Alignment.TopCenter),
+                contentColor = MaterialTheme.colorScheme.primary
             )
 
-            if (
-                pendingPhotos.isNotEmpty() &&
-                uploadState !is UploadState.Uploading &&
-                uploadState !is UploadState.Queued
-            ) {
-                Button(
-                    onClick = {
-                        viewModel.uploadPhotos()
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(
-                        imageVector =
-                            Icons.AutoMirrored.Filled.Send,
-                        contentDescription = null
-                    )
-
-                    Spacer(modifier = Modifier.width(8.dp))
-
-                    Text(
-                        text = if (pendingPhotos.size == 1) {
-                            "Upload 1 Photo"
-                        } else {
-                            "Upload ${pendingPhotos.size} Photos"
-                        },
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
+            if (isPreparingPhotos) {
+                PreparingPhotosOverlay()
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
         }
     }
 }
 
 @Composable
-private fun PicsumStatusSection(
-    state: PicsumState,
-    currentPage: Int,
-    onRetry: () -> Unit
+private fun GallerySelectionHeader(
+    totalCount: Int,
+    selectedCount: Int,
+    allSelected: Boolean,
+    enabled: Boolean,
+    onClearSelection: () -> Unit,
+    onSelectAll: () -> Unit
 ) {
-    when (state) {
-        PicsumState.Idle -> {
-            Text(
-                text = "Preparing the photo gallery..."
-            )
-        }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surface)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = 8.dp,
+                    end = 2.dp,
+                    top = 2.dp,
+                    bottom = 4.dp
+                ),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "$totalCount Picsum photos",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
 
-        PicsumState.Loading -> {
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp
-                    )
-
-                    Text(
-                        text = "Loading photos from page $currentPage..."
-                    )
-                }
+                Text(
+                    text = "$selectedCount selected",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-        }
 
-        is PicsumState.Downloading -> {
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+            Row {
+                if (selectedCount > 0) {
+                    TextButton(
+                        onClick = onClearSelection,
+                        enabled = enabled
+                    ) {
+                        Text(
+                            text = "Clear",
+                            color = if (enabled) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
+                }
+
+                TextButton(
+                    onClick = onSelectAll,
+                    enabled = enabled
                 ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp
-                    )
-
                     Text(
-                        text = if (state.selectedCount == 1) {
-                            "Saving 1 selected photo to local storage..."
+                        text = if (allSelected) {
+                            "Deselect All"
                         } else {
-                            "Saving ${state.selectedCount} selected photos to local storage..."
+                            "Select All"
                         }
                     )
                 }
             }
         }
 
-        is PicsumState.Error -> {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor =
-                        MaterialTheme.colorScheme.errorContainer
-                )
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = state.message,
-                        color =
-                            MaterialTheme.colorScheme.onErrorContainer
-                    )
-
-                    TextButton(
-                        onClick = onRetry
-                    ) {
-                        Text(text = "Retry")
-                    }
-                }
-            }
-        }
-
-        is PicsumState.Success -> {
-            if (state.photoCount == 0) {
-                Text(
-                    text = "No photos were returned for this page.",
-                    color = MaterialTheme.colorScheme.outline
-                )
-            }
-        }
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant
+        )
     }
 }
 
 @Composable
-private fun PicsumPhotoItem(
-    photo: PicsumPhoto,
-    onClick: () -> Unit
+private fun ApiPhotoGridItem(
+    photo: Photo,
+    isSelected: Boolean,
+    enabled: Boolean,
+    onToggleSelection: () -> Unit,
+    onOpenDetails: () -> Unit
 ) {
     Card(
         modifier = Modifier
-            .aspectRatio(1f)
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
-        border = if (photo.isSelected) {
-            BorderStroke(
-                width = 4.dp,
-                color = MaterialTheme.colorScheme.primary
+            .fillMaxWidth()
+            .border(
+                width = if (isSelected) 3.dp else 1.dp,
+                color = if (isSelected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.outlineVariant
+                },
+                shape = RoundedCornerShape(12.dp)
             )
-        } else {
-            null
-        }
+            .clickable(
+                enabled = enabled,
+                onClick = onToggleSelection
+            ),
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = 2.dp
+        ),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
     ) {
         Box(
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
         ) {
-            AsyncImage(
-                model = photo.downloadUrl,
-                contentDescription = "Photo by ${photo.author}",
+            SubcomposeAsyncImage(
+                model = photo.thumbnailUrl,
+                contentDescription = "Picsum photo by ${photo.author}",
+                contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                loading = {
+                    ImageLoadingPlaceholder()
+                },
+                error = {
+                    ImageErrorPlaceholder()
+                }
             )
 
-            if (photo.isSelected) {
-                Surface(
+            if (isSelected) {
+                Box(
                     modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp),
-                    shape = RoundedCornerShape(50),
-                    color = MaterialTheme.colorScheme.primary
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = "Selected",
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier
-                            .padding(3.dp)
-                            .size(22.dp)
+                        .fillMaxSize()
+                        .background(
+                            MaterialTheme.colorScheme.primary.copy(
+                                alpha = 0.12f
+                            )
+                        )
+                )
+            }
+
+            Icon(
+                imageVector = if (isSelected) {
+                    Icons.Filled.CheckCircle
+                } else {
+                    Icons.Outlined.Circle
+                },
+                contentDescription = if (isSelected) {
+                    "Photo selected"
+                } else {
+                    "Photo not selected"
+                },
+                tint = if (isSelected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    Color.White
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(26.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isSelected) {
+                            Color.White
+                        } else {
+                            Color.Black.copy(alpha = 0.45f)
+                        }
                     )
-                }
+            )
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .fillMaxWidth()
+                    .background(
+                        Color.Black.copy(alpha = 0.60f)
+                    )
+                    .clickable(
+                        enabled = enabled,
+                        onClick = onOpenDetails
+                    )
+                    .padding(
+                        horizontal = 6.dp,
+                        vertical = 5.dp
+                    )
+            ) {
+                Text(
+                    text = photo.author,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
 }
 
 @Composable
-private fun EmptyUploadFolder() {
+private fun PicsumContinueActionBar(
+    selectedCount: Int,
+    isPreparing: Boolean,
+    onContinueClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 12.dp,
+        tonalElevation = 3.dp
+    ) {
+        Button(
+            onClick = onContinueClick,
+            enabled = selectedCount > 0 && !isPreparing,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = 16.dp,
+                    vertical = 12.dp
+                )
+                .height(54.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            if (isPreparing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
+
+                Spacer(modifier = Modifier.size(8.dp))
+
+                Text(
+                    text = "Preparing photos...",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.CloudDownload,
+                    contentDescription = null,
+                    modifier = Modifier.size(22.dp)
+                )
+
+                Spacer(modifier = Modifier.size(8.dp))
+
+                Text(
+                    text = if (selectedCount == 0) {
+                        "Select Picsum photos"
+                    } else {
+                        "Continue with $selectedCount Photo${
+                            if (selectedCount == 1) "" else "s"
+                        }"
+                    },
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreparingPhotosOverlay() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.18f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            elevation = CardDefaults.cardElevation(
+                defaultElevation = 8.dp
+            ),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(
+                    horizontal = 24.dp,
+                    vertical = 20.dp
+                ),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(38.dp),
+                    strokeWidth = 3.dp
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Checking photo cache",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Text(
+                    text = "Missing photos will be downloaded once.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ImageLoadingPlaceholder() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(26.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.primary
+        )
+    }
+}
+
+@Composable
+private fun ImageErrorPlaceholder() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant
+            )
+            .padding(8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Filled.BrokenImage,
+            contentDescription = "Image could not be loaded",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(30.dp)
+        )
+
+        Spacer(modifier = Modifier.height(5.dp))
+
+        Text(
+            text = "Image unavailable",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun GalleryLoadingState() {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(90.dp),
+            .height(300.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            CircularProgressIndicator(
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(44.dp)
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            Text(
+                text = "Loading Picsum photos...",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyGalleryState() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(300.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Icon(
-                imageVector = Icons.Default.Image,
+                imageVector = Icons.Filled.BrokenImage,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.outline
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(48.dp)
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "Select photos above and move them here.",
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.outline
+                text = "No Picsum photos found",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Spacer(modifier = Modifier.height(5.dp))
+
+            Text(
+                text = "Pull down to refresh.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
 }
 
 @Composable
-private fun PendingPhotoThumbnail(
-    photo: Photo,
-    onRemove: () -> Unit
+private fun GalleryErrorState(
+    message: String,
+    onRetry: () -> Unit
 ) {
-    val imageModel = remember(photo.uriString) {
-        when {
-            photo.uriString.startsWith("content://") -> {
-                Uri.parse(photo.uriString)
-            }
-
-            photo.uriString.startsWith("file://") -> {
-                Uri.parse(photo.uriString)
-            }
-
-            else -> {
-                File(photo.uriString)
-            }
-        }
-    }
-
-    Box(
-        modifier = Modifier.aspectRatio(1f)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        AsyncImage(
-            model = imageModel,
-            contentDescription = photo.displayName,
-            modifier = Modifier
-                .fillMaxSize()
-                .clip(RoundedCornerShape(8.dp)),
-            contentScale = ContentScale.Crop
+        Icon(
+            imageVector = Icons.Filled.BrokenImage,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(48.dp)
         )
 
-        IconButton(
-            onClick = onRemove,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .size(30.dp)
-        ) {
-            Surface(
-                shape = RoundedCornerShape(50),
-                color =
-                    MaterialTheme.colorScheme.errorContainer
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Remove",
-                    modifier = Modifier
-                        .padding(2.dp)
-                        .size(20.dp),
-                    tint = MaterialTheme.colorScheme.error
-                )
-            }
-        }
-    }
-}
+        Spacer(modifier = Modifier.height(10.dp))
 
-@Composable
-private fun UploadStatusSection(
-    state: UploadState,
-    onCancel: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    when (state) {
-        UploadState.Idle -> Unit
+        Text(
+            text = "Failed to load Picsum photos",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center
+        )
 
-        UploadState.Queued -> {
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = "Upload queued...",
-                    modifier = Modifier.padding(16.dp)
-                )
-            }
-        }
+        Spacer(modifier = Modifier.height(6.dp))
 
-        is UploadState.Uploading -> {
-            Card(
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement =
-                            Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text =
-                                "Uploading ${state.current} of ${state.total}",
-                            fontWeight = FontWeight.Medium
-                        )
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
 
-                        TextButton(
-                            onClick = onCancel
-                        ) {
-                            Text(text = "Cancel")
-                        }
-                    }
+        Spacer(modifier = Modifier.height(16.dp))
 
-                    val progress =
-                        if (state.total > 0) {
-                            state.current.toFloat() /
-                                    state.total.toFloat()
-                        } else {
-                            0f
-                        }
-
-                    LinearProgressIndicator(
-                        progress = {
-                            progress.coerceIn(0f, 1f)
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        }
-
-        is UploadState.Success -> {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor =
-                        MaterialTheme.colorScheme.primaryContainer
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement =
-                        Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-
-                    Text(
-                        text = if (state.uploadedCount == 1) {
-                            "1 photo uploaded successfully."
-                        } else {
-                            "${state.uploadedCount} photos uploaded successfully."
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth(0.85f)
-                    )
-
-                    IconButton(
-                        onClick = onDismiss
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Dismiss"
-                        )
-                    }
-                }
-            }
-        }
-
-        is UploadState.Error -> {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor =
-                        MaterialTheme.colorScheme.errorContainer
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement =
-                        Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = state.message,
-                        modifier = Modifier
-                            .fillMaxWidth(0.85f),
-                        color =
-                            MaterialTheme.colorScheme.onErrorContainer
-                    )
-
-                    IconButton(
-                        onClick = onDismiss
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Dismiss"
-                        )
-                    }
-                }
-            }
+        Button(onClick = onRetry) {
+            Text(text = "Retry")
         }
     }
 }

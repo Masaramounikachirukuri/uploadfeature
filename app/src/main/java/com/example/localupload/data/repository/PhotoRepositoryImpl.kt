@@ -1,88 +1,87 @@
 package com.example.localupload.data.repository
 
+import android.net.Uri
 import com.example.localupload.data.local.LocalDataSource
-import com.example.localupload.data.remote.PicsumRemoteDataSource
 import com.example.localupload.data.remote.RemoteDataSource
 import com.example.localupload.domain.model.Photo
-import com.example.localupload.domain.model.PicsumPhoto
 import com.example.localupload.domain.model.UploadHistory
-import com.example.localupload.domain.model.UploadResult
+import com.example.localupload.domain.model.UploadResponse
 import com.example.localupload.domain.repository.PhotoRepository
-import kotlinx.coroutines.flow.Flow
 
 class PhotoRepositoryImpl(
-    private val localDataSource: LocalDataSource,
-    private val remoteDataSource: RemoteDataSource,
-    private val picsumRemoteDataSource: PicsumRemoteDataSource
+    private val remote: RemoteDataSource,
+    private val local: LocalDataSource
 ) : PhotoRepository {
 
-    override fun getPendingPhotos(): Flow<List<Photo>> {
-        return localDataSource.getPendingPhotos()
-    }
+    // -------------------------------------------------------------------------
+    // Picsum Gallery
+    // -------------------------------------------------------------------------
 
-    override suspend fun getPendingPhotosOnce(): List<Photo> {
-        return localDataSource.getPendingPhotosOnce()
-    }
-
-    override suspend fun addPendingPhotos(
-        photos: List<Photo>
-    ) {
-        localDataSource.addPendingPhotos(photos)
-    }
-
-    override suspend fun removePendingPhoto(
-        id: Int
-    ) {
-        localDataSource.removePendingPhoto(id)
-    }
-
-    override suspend fun clearPendingPhotos() {
-        localDataSource.clearPendingPhotos()
-    }
-
-    override suspend fun getPicsumPhotos(
+    override suspend fun fetchPhotos(
         page: Int,
         limit: Int
-    ): List<PicsumPhoto> {
-        return picsumRemoteDataSource.getPhotos(
+    ): List<Photo> {
+        return remote.fetchPhotos(
             page = page,
             limit = limit
         )
     }
 
-    override suspend fun downloadPicsumPhotos(
-        photos: List<PicsumPhoto>
-    ): List<Photo> {
-        return picsumRemoteDataSource.downloadPhotos(
+    /**
+     * Downloads selected Picsum photos to local cache
+     * and returns local URIs.
+     */
+    override suspend fun downloadPhotosToCache(
+        photos: List<Photo>
+    ): List<Uri> {
+        return remote.downloadPhotosToCache(
             photos = photos
         )
     }
+
+    // -------------------------------------------------------------------------
+    // Upload
+    // -------------------------------------------------------------------------
 
     override suspend fun uploadPhotos(
-        photos: List<Photo>
-    ): UploadResult {
-        return remoteDataSource.uploadPhotos(
-            photos = photos
+        uris: List<Uri>
+    ): UploadResponse {
+        return remote.uploadPhotos(
+            uris = uris
         )
     }
 
-    override fun getUploadHistory(): Flow<List<UploadHistory>> {
-        return localDataSource.getUploadHistory()
+    // -------------------------------------------------------------------------
+    // Upload History
+    // -------------------------------------------------------------------------
+
+    override fun getUploadHistory(): List<UploadHistory> {
+        return local.getAll()
     }
 
-    override suspend fun saveUploadHistory(
-        records: List<UploadHistory>
+    override fun getPendingPhotos(): List<UploadHistory> {
+        return local.getPending()
+    }
+
+    override fun addToHistory(
+        item: UploadHistory
     ) {
-        localDataSource.saveUploadHistory(records)
+        local.insert(item)
     }
 
-    override suspend fun deleteHistoryRecord(
-        id: Int
+    override fun updateHistory(
+        item: UploadHistory
     ) {
-        localDataSource.deleteHistoryRecord(id)
+        local.update(item)
     }
 
-    override suspend fun clearAllHistory() {
-        localDataSource.clearAllHistory()
+    override fun deleteHistory(
+        id: String
+    ) {
+        local.delete(id)
+    }
+
+    override fun clearHistory() {
+        local.clearAll()
     }
 }

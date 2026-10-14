@@ -1,49 +1,95 @@
 package com.example.localupload.domain.repository
 
+import android.net.Uri
 import com.example.localupload.domain.model.Photo
-import com.example.localupload.domain.model.PicsumPhoto
 import com.example.localupload.domain.model.UploadHistory
-import com.example.localupload.domain.model.UploadResult
-import kotlinx.coroutines.flow.Flow
+import com.example.localupload.domain.model.UploadResponse
 
+/**
+ * Defines the contract for Picsum gallery loading, remote photo caching,
+ * local photo uploading, and upload-history operations.
+ */
 interface PhotoRepository {
 
-    fun getPendingPhotos(): Flow<List<Photo>>
+    // -------------------------------------------------------------------------
+    // Picsum gallery
+    // -------------------------------------------------------------------------
 
-    suspend fun getPendingPhotosOnce(): List<Photo>
-
-    suspend fun addPendingPhotos(
-        photos: List<Photo>
-    )
-
-    suspend fun removePendingPhoto(
-        id: Int
-    )
-
-    suspend fun clearPendingPhotos()
-
-    suspend fun getPicsumPhotos(
-        page: Int,
-        limit: Int
-    ): List<PicsumPhoto>
-
-    suspend fun downloadPicsumPhotos(
-        photos: List<PicsumPhoto>
+    /**
+     * Fetches a paginated list of photos from the Picsum API.
+     */
+    suspend fun fetchPhotos(
+        page: Int = 1,
+        limit: Int = 30
     ): List<Photo>
 
-    suspend fun uploadPhotos(
+    /**
+     * Downloads selected Picsum photos into the application's cache directory.
+     *
+     * Picsum photos contain remote web URLs. UploadWorker expects local URIs,
+     * so selected remote photos must be downloaded before starting the upload.
+     *
+     * @param photos selected Picsum photos
+     * @return local cached URIs that UploadWorker can read
+     */
+    suspend fun downloadPhotosToCache(
         photos: List<Photo>
-    ): UploadResult
+    ): List<Uri>
 
-    fun getUploadHistory(): Flow<List<UploadHistory>>
+    // -------------------------------------------------------------------------
+    // Upload
+    // -------------------------------------------------------------------------
 
-    suspend fun saveUploadHistory(
-        records: List<UploadHistory>
+    /**
+     * Uploads local photo URIs to the configured server.
+     *
+     * The URIs may come from:
+     * - Camera
+     * - Android Photo Picker
+     * - Storage document picker
+     * - Picsum images downloaded into the app cache
+     */
+    suspend fun uploadPhotos(
+        uris: List<Uri>
+    ): UploadResponse
+
+    // -------------------------------------------------------------------------
+    // Upload history
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns all upload-history records, with the most recent records first.
+     */
+    fun getUploadHistory(): List<UploadHistory>
+
+    /**
+     * Returns records waiting for upload or retry.
+     */
+    fun getPendingPhotos(): List<UploadHistory>
+
+    /**
+     * Adds an upload-history record.
+     */
+    fun addToHistory(
+        item: UploadHistory
     )
 
-    suspend fun deleteHistoryRecord(
-        id: Int
+    /**
+     * Updates an existing upload-history record.
+     */
+    fun updateHistory(
+        item: UploadHistory
     )
 
-    suspend fun clearAllHistory()
+    /**
+     * Deletes one upload-history record.
+     */
+    fun deleteHistory(
+        id: String
+    )
+
+    /**
+     * Deletes all upload-history records.
+     */
+    fun clearHistory()
 }

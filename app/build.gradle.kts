@@ -2,7 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.ksp)
 }
 
 android {
@@ -37,7 +36,8 @@ android {
     }
 
     buildFeatures {
-        compose = true
+        compose      = true
+        buildConfig  = true   // required for BuildConfig.DEBUG used in RetrofitClient
     }
 }
 
@@ -54,11 +54,6 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.lifecycle.viewmodel.compose)
 
-    // Room DB — two tables: pending_photos + upload_history
-    implementation(libs.room.runtime)
-    implementation(libs.room.ktx)
-    ksp(libs.room.compiler)
-
     // Retrofit + OkHttp — multipart upload to HTTP server
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.gson)
@@ -67,6 +62,12 @@ dependencies {
 
     // Coil — load images from URI / local file path
     implementation(libs.coil.compose)
+
+    // Material 1 — pull-to-refresh in PhotoPickerScreen
+    implementation(libs.androidx.compose.material)
+
+    // Gson — JSON serialization in RemoteDataSource
+    implementation(libs.gson)
 
     // Coroutines — async upload operations
     implementation(libs.kotlinx.coroutines.android)

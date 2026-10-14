@@ -1,22 +1,15 @@
 package com.example.localupload.domain.usecase
 
-import com.example.localupload.domain.model.UploadResult
+import android.net.Uri
+import com.example.localupload.domain.model.UploadHistory
+import com.example.localupload.domain.model.UploadResponse
+import com.example.localupload.domain.model.UploadStatus
+import com.example.localupload.domain.repository.PhotoRepository
 
-/**
- * RetryUploadUseCase — retries a failed upload.
- *
- * The pending queue is NOT cleared on failure, so photos that failed to upload
- * are still present in Room. This use case simply re-invokes UploadPhotoUseCase,
- * which reads the current pending queue and attempts upload again.
- *
- * This is the Retry button pattern:
- *   UI "Retry" tap → ViewModel → RetryUploadUseCase → UploadPhotoUseCase → Repository
- *
- * Keeping it as a separate use case (rather than calling UploadPhotoUseCase directly)
- * allows future retry logic like exponential back-off or max-retry limits to be added
- * in one place without changing the ViewModel or UI.
- */
-class RetryUploadUseCase(private val uploadPhotoUseCase: UploadPhotoUseCase) {
-
-    suspend operator fun invoke(): UploadResult = uploadPhotoUseCase()
+class RetryUploadUseCase(private val repository: PhotoRepository) {
+    suspend operator fun invoke(item: UploadHistory): UploadResponse {
+        // Mark item as UPLOADING before retry
+        repository.updateHistory(item.copy(status = UploadStatus.UPLOADING))
+        return repository.uploadPhotos(listOf(Uri.parse(item.localUri)))
+    }
 }
